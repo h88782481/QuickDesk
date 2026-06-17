@@ -1,4 +1,4 @@
-﻿// QuickDesk signaling server 鈥?v1 refactor entrypoint.
+// QuickDesk signaling server 鈥?v1 refactor entrypoint.
 //
 // See docs/dev/淇′护鏈嶅姟鍣ˋPI閲嶆瀯鏂规.md 搂2.2 for the canonical route table;
 // this file is the wiring that implements it. Keep them in lock-step 鈥?
@@ -9,7 +9,9 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
+	_ "net/http/pprof"
 	"strings"
 
 	signaling "quickdesk/signaling"
@@ -27,13 +29,27 @@ import (
 )
 
 // Version is the semver / git-describe tag injected at build time via
-//   go build -ldflags "-X main.Version=$(git describe --tags --always)"
+//
+//	go build -ldflags "-X main.Version=$(git describe --tags --always)"
+//
 // Defaults to "dev" when unset (搂2.20).
 var Version string
 
 func main() {
 	log.Println("Starting QuickDesk Signaling Server...")
 	cfg := config.Load()
+	if cfg.Runtime.PprofAddr != "" {
+		if !isLoopbackAddr(cfg.Runtime.PprofAddr) {
+			log.Printf("pprof disabled: PPROF_ADDR must bind to loopback, got %q", cfg.Runtime.PprofAddr)
+		} else {
+			go func() {
+				log.Printf("pprof listening on %s", cfg.Runtime.PprofAddr)
+				if err := http.ListenAndServe(cfg.Runtime.PprofAddr, nil); err != nil {
+					log.Printf("pprof server stopped: %v", err)
+				}
+			}()
+		}
+	}
 
 	log.Println("Connecting to databases...")
 	db := database.InitPostgreSQL(cfg)
@@ -407,6 +423,18 @@ func main() {
 	if err := router.Run(addr); err != nil {
 		log.Fatalf("Failed to start server: %v", err)
 	}
+}
+
+func isLoopbackAddr(addr string) bool {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return false
+	}
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 // ensure httpx is imported 鈥?used transitively via middleware + handler.

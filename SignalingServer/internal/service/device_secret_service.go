@@ -2,6 +2,7 @@ package service
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
 	"encoding/hex"
@@ -9,6 +10,8 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 
 	"golang.org/x/crypto/argon2"
 )
@@ -21,28 +24,32 @@ import (
 // Hash format is self-describing so we can tune parameters later without a
 // migration:
 //
-//     argon2id$v=19$t=<time>$m=<memoryKB>$p=<parallelism>$<saltB64>$<hashB64>
+//	argon2id$v=19$t=<time>$m=<memoryKB>$p=<parallelism>$<saltB64>$<hashB64>
 type DeviceSecretService struct {
-	time       uint32
-	memoryKB   uint32
-	threads    uint8
-	keyLen     uint32
-	saltLen    uint32
-	secretLen  int
+	time      uint32
+	memoryKB  uint32
+	threads   uint8
+	keyLen    uint32
+	saltLen   uint32
+	secretLen int
+	verifySem chan struct{}
+	cacheMu   sync.Mutex
+	cache     map[string]time.Time
 }
 
-// NewDeviceSecretService returns a service preconfigured with sensible
-// defaults (argon2id, t=2, m=64MB, p=1, 32-byte output). These values are
-// fine for server-side secret verification on a signaling box; bump if
-// hardware allows.
+// NewDeviceSecretService returns a service preconfigured for frequent device
+// API authentication. Device secrets are high-entropy random values, so this
+// does not need password-grade Argon2 cost on every heartbeat.
 func NewDeviceSecretService() *DeviceSecretService {
 	return &DeviceSecretService{
-		time:      2,
-		memoryKB:  64 * 1024,
+		time:      1,
+		memoryKB:  8 * 1024,
 		threads:   1,
 		keyLen:    32,
 		saltLen:   16,
 		secretLen: 48, // 48 bytes hex ≈ 96 chars, plenty of entropy
+		verifySem: make(chan struct{}, 2),
+		cache:     map[string]time.Time{},
 	}
 }
 
@@ -75,6 +82,16 @@ func (s *DeviceSecretService) Hash(secret string) (string, error) {
 // Verify checks a plaintext secret against a stored hash. Uses
 // constant-time comparison.
 func (s *DeviceSecretService) Verify(secret, stored string) (bool, error) {
+	cacheKey := s.cacheKey(secret, stored)
+	if s.cacheHit(cacheKey) {
+		return true, nil
+	}
+	s.verifySem <- struct{}{}
+	defer func() { <-s.verifySem }()
+	if s.cacheHit(cacheKey) {
+		return true, nil
+	}
+
 	parts := strings.Split(stored, "$")
 	if len(parts) != 7 || parts[0] != "argon2id" {
 		return false, errors.New("unknown hash format")
@@ -106,7 +123,44 @@ func (s *DeviceSecretService) Verify(secret, stored string) (bool, error) {
 	got := argon2.IDKey([]byte(secret), salt,
 		uint32(tVal), uint32(mVal), uint8(pVal), uint32(len(want)))
 
-	return subtle.ConstantTimeCompare(got, want) == 1, nil
+	ok := subtle.ConstantTimeCompare(got, want) == 1
+	if ok {
+		s.cacheStore(cacheKey)
+	}
+	return ok, nil
+}
+
+func (s *DeviceSecretService) cacheKey(secret, stored string) string {
+	sum := sha256.Sum256([]byte(secret + "\x00" + stored))
+	return hex.EncodeToString(sum[:])
+}
+
+func (s *DeviceSecretService) cacheHit(key string) bool {
+	s.cacheMu.Lock()
+	defer s.cacheMu.Unlock()
+	expires, ok := s.cache[key]
+	if !ok {
+		return false
+	}
+	if time.Now().After(expires) {
+		delete(s.cache, key)
+		return false
+	}
+	return true
+}
+
+func (s *DeviceSecretService) cacheStore(key string) {
+	s.cacheMu.Lock()
+	defer s.cacheMu.Unlock()
+	if len(s.cache) > 4096 {
+		now := time.Now()
+		for k, expires := range s.cache {
+			if now.After(expires) {
+				delete(s.cache, k)
+			}
+		}
+	}
+	s.cache[key] = time.Now().Add(10 * time.Minute)
 }
 
 func parseParam(part, prefix string) (uint64, error) {

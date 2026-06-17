@@ -1,4 +1,4 @@
-﻿package service
+package service
 
 import (
 	"context"
@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	"quickdesk/signaling/internal/models"
@@ -18,11 +19,11 @@ import (
 )
 
 // DeviceService owns the device lifecycle under the v1 API:
-//   * Provision (搂2.5): allocate (device_id, device_secret) on first run
+//   - Provision (搂2.5): allocate (device_id, device_secret) on first run
 //     or rotate on machine_fingerprint mismatch.
-//   * Heartbeat / last-seen bookkeeping.
-//   * Access-code storage + verify.
-//   * Secret verification (for device_secret Bearer middleware).
+//   - Heartbeat / last-seen bookkeeping.
+//   - Access-code storage + verify.
+//   - Secret verification (for device_secret Bearer middleware).
 //
 // All presence state (online/wsconn) lives in PresenceService; DeviceService
 // only touches PostgreSQL.
@@ -56,9 +57,9 @@ type ProvisionResult struct {
 }
 
 // Provision allocates or rotates a device_secret for the given device_uuid.
-// - New UUID 鈫?create device + allocate device_id + secret.
-// - Existing UUID 鈫?keep device_id, user_id, access_code, etc. intact, but
-//   rotate device_secret (old secret is invalidated).
+//   - New UUID 鈫?create device + allocate device_id + secret.
+//   - Existing UUID 鈫?keep device_id, user_id, access_code, etc. intact, but
+//     rotate device_secret (old secret is invalidated).
 func (s *DeviceService) Provision(ctx context.Context, req ProvisionRequest) (ProvisionResult, error) {
 	if req.DeviceUUID == "" {
 		return ProvisionResult{}, errors.New("device_uuid is required")
@@ -133,7 +134,21 @@ func (s *DeviceService) VerifyDeviceSecret(ctx context.Context, deviceID, plaint
 	if d.DeviceSecretHash == "" {
 		return false, nil
 	}
-	return s.secrets.Verify(plaintext, d.DeviceSecretHash)
+	ok, err := s.secrets.Verify(plaintext, d.DeviceSecretHash)
+	if ok && needsDeviceSecretRehash(d.DeviceSecretHash) {
+		if hash, hErr := s.secrets.Hash(plaintext); hErr == nil {
+			_ = s.repo.SetDeviceSecretHash(ctx, deviceID, hash)
+		}
+	}
+	return ok, err
+}
+
+func needsDeviceSecretRehash(stored string) bool {
+	parts := strings.Split(stored, "$")
+	if len(parts) != 7 || parts[0] != "argon2id" {
+		return false
+	}
+	return parts[2] != "t=1" || parts[3] != "m=8192" || parts[4] != "p=1"
 }
 
 // RotateSecret generates a new plaintext secret (used by admin
@@ -311,7 +326,7 @@ func (s *DeviceService) ClearSession(ctx context.Context, deviceID string, userI
 // PatchMeta partially updates device metadata the owner controls.
 type PatchMetaInput struct {
 	DeviceName *string
-	Remark      *string // goes on user_devices, not devices
+	Remark     *string // goes on user_devices, not devices
 }
 
 // PatchMeta updates device_name on devices and/or remark on user_devices.

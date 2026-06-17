@@ -21,7 +21,7 @@ type IceConfig struct {
 	AuthSecret    string // shared secret with coturn (use-auth-secret mode)
 	CredentialTTL int    // TURN credential TTL in seconds
 	StunURLs      []string
-	MaxRateKbps   int    // max bitrate (kbps) for TURN relayed connections; 0 means no cap
+	MaxRateKbps   int // max bitrate (kbps) for TURN relayed connections; 0 means no cap
 }
 
 type AdminConfig struct {
@@ -55,6 +55,7 @@ type Config struct {
 
 type RuntimeConfig struct {
 	RunAutoMigrate bool
+	PprofAddr      string
 }
 
 type ServerConfig struct {
@@ -123,6 +124,7 @@ func Load() *Config {
 	viper.SetDefault("ALIYUN_SMS_TEMPLATE_CODE", "")
 
 	viper.SetDefault("RUN_AUTO_MIGRATE", false)
+	viper.SetDefault("PPROF_ADDR", "")
 
 	if err := viper.ReadInConfig(); err != nil {
 		if _, ok := err.(viper.ConfigFileNotFoundError); ok {
@@ -183,17 +185,18 @@ func Load() *Config {
 	}
 	cfg.Runtime = RuntimeConfig{
 		RunAutoMigrate: viper.GetBool("RUN_AUTO_MIGRATE"),
+		PprofAddr:      viper.GetString("PPROF_ADDR"),
 	}
 
 	apiKeyStatus := "disabled"
 	if cfg.Security.APIKey != "" {
 		apiKeyStatus = "enabled"
 	}
-	log.Printf("Loaded config: Server=%s:%d, DB=%s:%d/%s, ICE TURN=%d STUN=%d TTL=%ds MaxRate=%dkbps, APIKey=%s, AllowedOrigins=%d, SMS=%v, AutoMigrate=%v",
+	log.Printf("Loaded config: Server=%s:%d, DB=%s:%d/%s, ICE TURN=%d STUN=%d TTL=%ds MaxRate=%dkbps, APIKey=%s, AllowedOrigins=%d, SMS=%v, AutoMigrate=%v, Pprof=%v",
 		cfg.Server.Host, cfg.Server.Port,
 		cfg.Database.Host, cfg.Database.Port, cfg.Database.DBName,
 		len(cfg.Ice.TurnURLs), len(cfg.Ice.StunURLs), cfg.Ice.CredentialTTL, cfg.Ice.MaxRateKbps,
-		apiKeyStatus, len(cfg.Security.AllowedOrigins), cfg.Sms.Enabled, cfg.Runtime.RunAutoMigrate)
+		apiKeyStatus, len(cfg.Security.AllowedOrigins), cfg.Sms.Enabled, cfg.Runtime.RunAutoMigrate, cfg.Runtime.PprofAddr != "")
 
 	return cfg
 }
