@@ -144,7 +144,7 @@ void CloudDeviceManager::autoBindDevice(const QString& deviceId)
     m_authManager->request("POST", url, bodyData,
         [this, deviceId](int statusCode, const std::string& errorMsg, const std::string& data) {
             Q_UNUSED(data);
-            QMetaObject::invokeMethod(this, [this, statusCode, errorMsg, deviceId]() {
+            QMetaObject::invokeMethod(this, [statusCode, errorMsg, deviceId]() {
                 if (statusCode != 200 || !errorMsg.empty()) {
                     LOG_WARN("[CloudDeviceManager] autoBindDevice({}) failed: status={} err={}",
                              deviceId.toStdString(), statusCode, errorMsg);
