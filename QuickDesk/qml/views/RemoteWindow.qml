@@ -949,7 +949,7 @@ Window {
                 visible: transferModel.count === 0
                 Layout.fillWidth: true
                 Layout.fillHeight: true
-                iconSource: FluentIconGlyph.statusDataTransferGlyph
+                iconSource: FluentIconGlyph.sortGlyph
                 title: qsTr("No Transfers")
                 description: qsTr("Use the menu to upload or download files")
             }

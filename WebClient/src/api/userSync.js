@@ -279,6 +279,7 @@ class UserSync extends EventTarget {
     } else if (type === 'device.access_code.changed') {
       if (idx >= 0 && rev > currentRev) {
         this._deviceRevs.set(deviceId, rev)
+        this._refreshDeviceAccessCode(deviceId, rev)
         dirty = true
       }
     } else {
@@ -322,6 +323,27 @@ class UserSync extends EventTarget {
         detail: { devices: this.getDevices(), type, data },
       }))
     }
+  }
+
+  async _refreshDeviceAccessCode(deviceId, eventRev) {
+    const r = await userApi.fetchMyDevice(deviceId).catch((err) => ({
+      ok: false,
+      error: err && err.message ? err.message : String(err),
+    }))
+    if (!r || !r.ok || !r.data || !r.data.access_code) return
+
+    const idx = this._findDeviceIdx(deviceId)
+    if (idx < 0) {
+      this._devices.push({ ...r.data })
+      this._deviceRevs.set(deviceId, Math.max(eventRev, this._deviceRevs.get(deviceId) || 0))
+    } else {
+      this._devices[idx] = { ...this._devices[idx], access_code: r.data.access_code }
+      this._deviceRevs.set(deviceId, Math.max(eventRev, this._deviceRevs.get(deviceId) || 0))
+    }
+
+    this.dispatchEvent(new CustomEvent('devices-changed', {
+      detail: { devices: this.getDevices(), type: 'device.access_code.refreshed', data: { device_id: deviceId } },
+    }))
   }
 
   _applyFavoriteEvent(type, data) {

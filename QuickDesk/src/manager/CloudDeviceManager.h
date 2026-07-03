@@ -129,6 +129,7 @@ private:
     void handleSnapshotFrame(const QJsonObject& msg);
     void applyDeviceEvent(const QString& type, const QJsonObject& data);
     void applyFavoriteEvent(const QString& type, const QJsonObject& data);
+    void refreshDeviceAccessCode(const QString& deviceId, qint64 eventRev);
     void sendAuthFrame();
     bool shouldApplyWireFrame(const QString& type, qint64 rev);
     void setDeviceRev(const QString& deviceId, qint64 rev);

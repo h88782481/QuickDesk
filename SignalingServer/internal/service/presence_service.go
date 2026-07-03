@@ -37,6 +37,10 @@ type PresenceState struct {
 	Online    bool
 }
 
+func (s PresenceState) String() string {
+	return fmt.Sprintf("hb=%t ws_count=%d online=%t", s.Heartbeat, s.WSCount, s.Online)
+}
+
 const (
 	presenceHeartbeatTTL   = 90 * time.Second
 	presenceWSTTL          = 24 * time.Hour

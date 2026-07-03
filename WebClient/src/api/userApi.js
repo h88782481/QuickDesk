@@ -310,6 +310,10 @@ class UserApi {
 
   fetchMyDevices() { return this._req('GET', '/v1/me/devices') }
 
+  fetchMyDevice(deviceId) {
+    return this._req('GET', `/v1/me/devices/${encodeURIComponent(deviceId)}`)
+  }
+
   unbindDevice(deviceId) {
     return this._req('DELETE', `/v1/me/devices/${encodeURIComponent(deviceId)}`)
   }

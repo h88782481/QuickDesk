@@ -660,9 +660,9 @@ Item {
         }
 
         QDMenuItem {
-            visible: root.supportsFileTransfer && root.activeTransferCount > 0
+            visible: root.supportsFileTransfer
             text: qsTr("Transfers") + " (" + root.activeTransferCount + ")"
-            iconText: FluentIconGlyph.statusDataTransferGlyph
+            iconText: FluentIconGlyph.sortGlyph
             onTriggered: {
                 root.showTransferPanelRequested()
             }

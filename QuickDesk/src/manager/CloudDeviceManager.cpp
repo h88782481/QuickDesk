@@ -223,6 +223,73 @@ void CloudDeviceManager::setDeviceRemark(const QString& deviceId, const QString&
         });
 }
 
+void CloudDeviceManager::refreshDeviceAccessCode(const QString& deviceId, qint64 eventRev)
+{
+    if (!m_authManager->isLoggedIn() || deviceId.isEmpty()) return;
+
+    QUrl url(httpBaseUrl() + "v1/me/devices/" + deviceId);
+
+    LOG_INFO("[CloudDeviceManager] Refreshing access_code for device={} (event_rev={})",
+             deviceId.toStdString(), eventRev);
+
+    m_authManager->request("GET", url, QString(),
+        [this, deviceId, eventRev](int statusCode, const std::string& errorMsg, const std::string& data) {
+            QMetaObject::invokeMethod(this, [this, statusCode, errorMsg, data, deviceId, eventRev]() {
+                if (statusCode != 200 || !errorMsg.empty()) {
+                    LOG_WARN("[CloudDeviceManager] refreshDeviceAccessCode({}) failed: status={} err={}",
+                             deviceId.toStdString(), statusCode, errorMsg);
+                    return;
+                }
+
+                QJsonDocument doc = QJsonDocument::fromJson(QByteArray::fromStdString(data));
+                QJsonObject obj = doc.object();
+                QString accessCode = obj["access_code"].toString();
+                if (accessCode.isEmpty()) {
+                    LOG_WARN("[CloudDeviceManager] refreshDeviceAccessCode({}) returned empty access_code",
+                             deviceId.toStdString());
+                    return;
+                }
+
+                int idx = -1;
+                for (int i = 0; i < m_myDevices.size(); ++i) {
+                    if (m_myDevices[i].toMap()["device_id"].toString() == deviceId) {
+                        idx = i;
+                        break;
+                    }
+                }
+
+                if (idx < 0) {
+                    QVariantMap row = obj.toVariantMap();
+                    setDeviceRev(deviceId, eventRev);
+                    m_myDevices.append(row);
+                    emit myDevicesChanged();
+                    LOG_INFO("[CloudDeviceManager] Refreshed access_code and inserted device: {}",
+                             deviceId.toStdString());
+                    return;
+                }
+
+                QVariantMap row = m_myDevices[idx].toMap();
+                if (row["access_code"].toString() == accessCode) {
+                    if (eventRev > deviceRev(deviceId)) {
+                        setDeviceRev(deviceId, eventRev);
+                    }
+                    LOG_INFO("[CloudDeviceManager] access_code already current for device={}",
+                             deviceId.toStdString());
+                    return;
+                }
+
+                row["access_code"] = accessCode;
+                if (eventRev > deviceRev(deviceId)) {
+                    setDeviceRev(deviceId, eventRev);
+                }
+                m_myDevices[idx] = row;
+                emit myDevicesChanged();
+                LOG_INFO("[CloudDeviceManager] Refreshed access_code for device: {}",
+                         deviceId.toStdString());
+            });
+        });
+}
+
 // §2.23: Qt syncs access_code using Bearer <device_secret>. device_secret
 // is NOT the user access_token — so we bypass AuthManager::request()
 // (which injects the user Bearer) and build headers manually.
@@ -939,8 +1006,10 @@ void CloudDeviceManager::applyDeviceEvent(const QString& type, const QJsonObject
     } else if (type == "device.access_code.changed") {
         // §2.16: event data does NOT carry plaintext access_code. The
         // device row revision still advances so older HTTP/snapshot data
-        // cannot overwrite newer online/offline state. The actual code is
-        // patched locally by syncAccessCode when this Qt instance uploads it.
+        // cannot overwrite newer online/offline state. Refresh only this
+        // device's plaintext code; do not refetch the whole list because
+        // list-derived online/logged_in can race with realtime presence.
+        refreshDeviceAccessCode(deviceId, rev);
         changed = true;
     } else if (type == "device.remark.changed") {
         copyField("remark");

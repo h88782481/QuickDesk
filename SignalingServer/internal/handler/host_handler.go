@@ -3,6 +3,7 @@ package handler
 import (
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -109,9 +110,9 @@ type heartbeatReq struct {
 }
 
 type heartbeatResp struct {
-	ServerTime                   string `json:"server_time"`
-	TurnConfigVersion            int64  `json:"turn_config_version"`
-	SuggestedHeartbeatIntervalSec int   `json:"suggested_heartbeat_interval_sec,omitempty"`
+	ServerTime                    string `json:"server_time"`
+	TurnConfigVersion             int64  `json:"turn_config_version"`
+	SuggestedHeartbeatIntervalSec int    `json:"suggested_heartbeat_interval_sec,omitempty"`
 }
 
 func (h *HostHandler) Heartbeat(c *gin.Context) {
@@ -381,6 +382,9 @@ func (h *HostHandler) VerifyAccessCode(c *gin.Context) {
 		// the per-(device,ip) failure counter — this is a legitimate
 		// caller who just happens to have arrived while the host is
 		// offline.
+		state := h.presence.State(c.Request.Context(), deviceID)
+		log.Printf("[access-code:verify] HOST_OFFLINE device=%s ip=%s presence={%s}",
+			deviceID, ip, state.String())
 		h.rateLimit.ResetVerifyFailures(c.Request.Context(), deviceID, ip)
 		ProblemConflict(c, ProblemCodeHostOffline, "Host is offline")
 		return

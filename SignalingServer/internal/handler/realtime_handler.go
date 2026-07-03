@@ -519,6 +519,8 @@ func (h *RealtimeHandler) HandleSignal(c *gin.Context) {
 		return
 	}
 	if af.Type != "auth" || af.SignalToken == "" || af.DeviceID == "" {
+		log.Printf("[realtime/signal] auth invalid: missing first-frame fields remote=%s role=%s device=%s",
+			c.ClientIP(), af.Role, af.DeviceID)
 		writeSignalError(conn, "AUTH_INVALID", "first frame must supply signal_token + device_id")
 		_ = conn.Close()
 		return
@@ -535,16 +537,22 @@ func (h *RealtimeHandler) HandleSignal(c *gin.Context) {
 		payload, err = h.tokens.ValidateAndExtendSignalToken(c.Request.Context(), af.SignalToken)
 	}
 	if err != nil {
+		log.Printf("[realtime/signal] auth token rejected remote=%s role=%s device=%s err=%v",
+			c.ClientIP(), af.Role, af.DeviceID, err)
 		writeSignalError(conn, "AUTH_INVALID", "signal_token invalid or expired")
 		_ = conn.Close()
 		return
 	}
 	if payload.DeviceID != af.DeviceID {
+		log.Printf("[realtime/signal] auth device mismatch remote=%s role=%s frame_device=%s token_device=%s",
+			c.ClientIP(), af.Role, af.DeviceID, payload.DeviceID)
 		writeSignalError(conn, "AUTH_INVALID", "device_id mismatch")
 		_ = conn.Close()
 		return
 	}
 	if string(payload.Role) != af.Role {
+		log.Printf("[realtime/signal] auth role mismatch remote=%s frame_role=%s token_role=%s device=%s",
+			c.ClientIP(), af.Role, payload.Role, af.DeviceID)
 		writeSignalError(conn, "AUTH_INVALID", "role mismatch")
 		_ = conn.Close()
 		return
@@ -555,7 +563,10 @@ func (h *RealtimeHandler) HandleSignal(c *gin.Context) {
 	// is currently online 鈥?otherwise return a clean HOST_OFFLINE
 	// (scenario 37).
 	if payload.Role == service.SignalRoleClient {
-		if !h.presence.IsOnline(c.Request.Context(), payload.DeviceID) {
+		state := h.presence.State(c.Request.Context(), payload.DeviceID)
+		if !state.Online {
+			log.Printf("[realtime/signal] HOST_OFFLINE client_auth remote=%s device=%s client_id=%s presence={%s}",
+				c.ClientIP(), payload.DeviceID, firstNonEmpty(af.ClientID, payload.ClientID), state.String())
 			writeSignalError(conn, "HOST_OFFLINE", "Host is offline")
 			_ = conn.Close()
 			return
@@ -587,6 +598,8 @@ func (h *RealtimeHandler) HandleSignal(c *gin.Context) {
 		out:      make(chan []byte, 64),
 		done:     make(chan struct{}),
 	}
+	log.Printf("[realtime/signal] auth_ok role=%s device=%s client_id=%s session=%s remote=%s",
+		sc.role, sc.deviceID, sc.clientID, sessionID, c.ClientIP())
 	if err := conn.WriteJSON(map[string]interface{}{
 		"type":       "auth_ok",
 		"session_id": sessionID,
@@ -606,6 +619,9 @@ func (h *RealtimeHandler) HandleSignal(c *gin.Context) {
 
 	if sc.role == service.SignalRoleHost {
 		if err := h.presence.MarkWSConnected(c.Request.Context(), sc.deviceID); err == nil {
+			state := h.presence.State(c.Request.Context(), sc.deviceID)
+			log.Printf("[realtime/signal] host presence connected device=%s session=%s presence={%s}",
+				sc.deviceID, sessionID, state.String())
 			if h.presence.IsOnline(c.Request.Context(), sc.deviceID) && h.presence.RememberOnlineCandidate(c.Request.Context(), sc.deviceID) {
 				if d, err := h.devices.GetByDeviceID(c.Request.Context(), sc.deviceID); err == nil && d.UserID != nil {
 					h.bus.Publish(c.Request.Context(), service.Event{
@@ -620,6 +636,9 @@ func (h *RealtimeHandler) HandleSignal(c *gin.Context) {
 					})
 				}
 			}
+		} else {
+			log.Printf("[realtime/signal] host presence mark failed device=%s session=%s err=%v",
+				sc.deviceID, sessionID, err)
 		}
 	}
 
@@ -691,6 +710,9 @@ func (h *RealtimeHandler) unregisterSignalConn(sc *signalConn) {
 
 	if sc.role == service.SignalRoleHost && shouldPublishOffline {
 		_ = h.presence.MarkWSDisconnected(context.Background(), sc.deviceID)
+		state := h.presence.State(context.Background(), sc.deviceID)
+		log.Printf("[realtime/signal] host disconnected device=%s presence_after_del={%s} closing_clients=%d",
+			sc.deviceID, state.String(), len(clientsToClose))
 		for _, cc := range clientsToClose {
 			cc.send(mustMarshal(map[string]interface{}{
 				"type": "error",
@@ -698,7 +720,7 @@ func (h *RealtimeHandler) unregisterSignalConn(sc *signalConn) {
 			}))
 			go cc.close()
 		}
-		if online := h.presence.IsOnline(context.Background(), sc.deviceID); !online && h.presence.ForgetOnlineCandidate(context.Background(), sc.deviceID) {
+		if !state.Online && h.presence.ForgetOnlineCandidate(context.Background(), sc.deviceID) {
 			if d, err := h.devices.GetByDeviceID(context.Background(), sc.deviceID); err == nil && d.UserID != nil {
 				h.bus.Publish(context.Background(), service.Event{
 					Type:     service.EventDeviceOnlineChanged,
